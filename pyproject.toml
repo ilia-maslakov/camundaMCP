@@ -1,0 +1,84 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "camunda-mcp"
+version = "0.1.0"
+description = "MCP server for Camunda 7 over stdio"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+    "fastmcp>=2.0",
+    "httpx>=0.27",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "tenacity>=8.5",
+    "structlog>=24.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "respx>=0.21",
+    "testcontainers>=4.7",
+    "ruff>=0.6",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+camunda-mcp = "camunda_mcp.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/camunda_mcp"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "D",        # pydocstyle — no enforced docstrings in MVP
+    "COM812",   # conflicts with formatter
+    "ISC001",   # conflicts with formatter
+    "TRY003",   # long exception messages are fine
+    "EM101",    # string in exception — readability > rule
+    "EM102",
+    "PLR0913",  # tolerate many args in tool signatures
+    "S101",     # asserts allowed in tests (also overridden below)
+    "FBT001",   # bool positional args OK for tool flags
+    "FBT002",
+    "ANN401",   # Any is fine for variables/JSON interop
+    "TC001",    # typing-only imports are cosmetic
+    "TC002",
+    "TC003",
+    "TID252",   # allow relative imports within tests/ via conftest
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "PLR2004", "ANN", "SLF001", "INP001"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
+module = ["testcontainers.*", "respx.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "integration: integration tests that require docker (testcontainers)",
+]

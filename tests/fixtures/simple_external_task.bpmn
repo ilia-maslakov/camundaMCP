@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:camunda="http://camunda.org/schema/1.0/bpmn"
+                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                  targetNamespace="http://camunda.org/schema/1.0/bpmn"
+                  id="Definitions_simple">
+  <bpmn:process id="simple" name="Simple External Task" isExecutable="true">
+    <bpmn:startEvent id="Start"/>
+    <bpmn:sequenceFlow id="sf_1" sourceRef="Start" targetRef="DoWork"/>
+    <bpmn:serviceTask id="DoWork" name="Do Work"
+                      camunda:type="external"
+                      camunda:topic="simple-topic"/>
+    <bpmn:sequenceFlow id="sf_2" sourceRef="DoWork" targetRef="End"/>
+    <bpmn:endEvent id="End"/>
+  </bpmn:process>
+</bpmn:definitions>
