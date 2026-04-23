@@ -94,6 +94,51 @@ async def test_complete_external_task_sends_worker_id(camunda_client: CamundaCli
 
 
 @pytest.mark.asyncio
+async def test_get_process_status_falls_back_to_history(camunda_client: CamundaClient) -> None:
+    """Runtime endpoint 404s after completion; status must fall back to /history/*."""
+    pi_id = "pi-done"
+    with respx.mock() as mock:
+        mock.get(f"{ENGINE_REST_URL}/process-instance/{pi_id}").mock(
+            return_value=httpx.Response(404, json={"type": "RestException", "message": "gone"}),
+        )
+        mock.get(f"{ENGINE_REST_URL}/history/process-instance/{pi_id}").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": pi_id,
+                    "processDefinitionId": "f:1",
+                    "businessKey": "bk",
+                    "state": "COMPLETED",
+                    "endTime": "2026-04-22T12:00:00.000+0000",
+                },
+            ),
+        )
+        mock.get(f"{ENGINE_REST_URL}/history/activity-instance").mock(
+            return_value=httpx.Response(
+                200,
+                json=[
+                    {"id": "ha1", "activityId": "start", "activityType": "startEvent"},
+                    {"id": "ha2", "activityId": "task1", "activityName": "Task 1",
+                     "activityType": "serviceTask"},
+                ],
+            ),
+        )
+        mock.get(f"{ENGINE_REST_URL}/history/variable-instance").mock(
+            return_value=httpx.Response(
+                200,
+                json=[{"name": "amount", "value": 100, "type": "Long"}],
+            ),
+        )
+        status = await camunda_client.get_process_status(pi_id)
+        assert status.instance.id == pi_id
+        assert status.instance.ended is True
+        assert status.instance.suspended is False
+        assert {a.activity_id for a in status.activities} == {"start", "task1"}
+        assert status.variables == {"amount": 100}
+        assert status.incidents == []
+
+
+@pytest.mark.asyncio
 async def test_get_activity_instances_flattens(camunda_client: CamundaClient) -> None:
     tree = {
         "id": "root",

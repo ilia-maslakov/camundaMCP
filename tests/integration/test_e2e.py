@@ -13,10 +13,16 @@ import httpx
 import pytest
 
 try:
+    import docker  # transitively available with testcontainers
     from testcontainers.core.container import DockerContainer
     from testcontainers.core.waiting_utils import wait_for_logs
 except ImportError:  # pragma: no cover — optional dep
     pytest.skip("testcontainers not installed", allow_module_level=True)
+
+try:
+    docker.from_env().ping()
+except Exception as exc:  # pragma: no cover — depends on host env  # noqa: BLE001
+    pytest.skip(f"docker daemon not available: {exc}", allow_module_level=True)
 
 from camunda_mcp.authz import PermissionDeniedError
 from camunda_mcp.camunda.client import CamundaClient
@@ -154,7 +160,8 @@ async def test_retries_recovery(deployed: str, client: CamundaClient) -> None:
     await complete_external_task_impl(client, Role.OPERATOR, task2["id"], worker_id)
 
     status = await get_process_status_impl(client, Role.READER, instance.id)
-    assert status.instance.ended is True or (await client.find_active_instance("simple", "bk-retries")) is None
+    assert status.instance.ended is True
+    assert status.incidents == []
 
 
 @pytest.mark.asyncio

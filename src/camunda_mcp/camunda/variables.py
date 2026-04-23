@@ -49,18 +49,38 @@ def to_camunda_vars(variables: dict[str, Any] | None) -> dict[str, dict[str, Any
     return result
 
 
-def _from_variable(var: dict[str, Any]) -> Any:
+def from_camunda_var(var: dict[str, Any]) -> Any:
+    """Decode a single Camunda REST variable payload into a native Python value.
+
+    Handles both shapes returned by Camunda:
+      - Runtime/get-variables: dict entry ``{"value": ..., "type": ..., "valueInfo": ...}``
+      - Historic-variable-instance items: same shape plus ``name`` and bookkeeping fields.
+
+    JSON payloads arrive either as ``type == "Json"`` or as ``type == "Object"`` with
+    ``valueInfo.serializationDataFormat == "application/json"`` (the Jackson/Spin default
+    for user-defined POJOs and any variable written through spin). Both are decoded.
+    """
     t = var.get("type")
     v = var.get("value")
-    if t == "Json" and isinstance(v, str):
-        try:
-            return json.loads(v)
-        except json.JSONDecodeError:
-            return v
+    if not isinstance(v, str):
+        return v
+    if t == "Json":
+        return _try_json_loads(v)
+    if t == "Object":
+        value_info = var.get("valueInfo") or {}
+        if value_info.get("serializationDataFormat") == "application/json":
+            return _try_json_loads(v)
     return v
+
+
+def _try_json_loads(raw: str) -> Any:
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
 
 
 def from_camunda_vars(variables: dict[str, dict[str, Any]] | None) -> dict[str, Any]:
     if not variables:
         return {}
-    return {name: _from_variable(v) for name, v in variables.items()}
+    return {name: from_camunda_var(v) for name, v in variables.items()}

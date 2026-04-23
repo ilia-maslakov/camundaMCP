@@ -51,3 +51,34 @@ def test_unsupported_type_raises() -> None:
 
     with pytest.raises(TypeError):
         to_camunda_vars({"x": Opaque()})
+
+
+def test_object_type_with_json_serialization_decoded() -> None:
+    """Camunda returns Spin/Jackson payloads as type=Object + serializationDataFormat=application/json."""
+    payload = {
+        "payload": {
+            "value": '{"foo": 1, "bar": ["a", "b"]}',
+            "type": "Object",
+            "valueInfo": {
+                "objectTypeName": "com.example.Payload",
+                "serializationDataFormat": "application/json",
+            },
+        },
+    }
+    assert from_camunda_vars(payload) == {"payload": {"foo": 1, "bar": ["a", "b"]}}
+
+
+def test_object_type_with_java_serialization_left_opaque() -> None:
+    payload = {
+        "blob": {
+            "value": "rO0ABXNyABFqYXZhLn…",
+            "type": "Object",
+            "valueInfo": {"serializationDataFormat": "application/x-java-serialized-object"},
+        },
+    }
+    assert from_camunda_vars(payload) == {"blob": "rO0ABXNyABFqYXZhLn…"}
+
+
+def test_json_type_with_invalid_payload_returns_raw() -> None:
+    payload = {"x": {"value": "{not-json", "type": "Json"}}
+    assert from_camunda_vars(payload) == {"x": "{not-json"}

@@ -15,6 +15,7 @@ from .config import Settings
 from .logging import get_logger
 
 _RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504})
+_IDEMPOTENT_METHODS = frozenset({"GET", "HEAD", "PUT", "DELETE", "OPTIONS"})
 log = get_logger(__name__)
 
 
@@ -52,16 +53,24 @@ async def request_with_retry(
 ) -> httpx.Response:
     """Issue a request with exponential-backoff retry on transport errors and retryable 5xx/429.
 
+    Only idempotent methods (GET/HEAD/PUT/DELETE/OPTIONS) are retried automatically; POSTs
+    execute at most once because a lost response can mask successful server-side state change.
+    Callers that know a specific POST is idempotent (e.g., has an idempotency key) should
+    handle recovery themselves.
+
     Raises the final exception (or its inner HTTPStatusError) on exhaustion.
     """
+    idempotent = method.upper() in _IDEMPOTENT_METHODS
+    effective_attempts = max_attempts if idempotent else 1
+
     async def _do() -> httpx.Response:
         resp = await client.request(method, url, **kwargs)  # type: ignore[arg-type]
-        if resp.status_code in _RETRYABLE_STATUS:
+        if idempotent and resp.status_code in _RETRYABLE_STATUS:
             resp.raise_for_status()
         return resp
 
     retrying: AsyncRetrying = AsyncRetrying(
-        stop=stop_after_attempt(max_attempts),
+        stop=stop_after_attempt(effective_attempts),
         wait=wait_exponential(multiplier=0.5, min=0.5, max=30),
         retry=retry_if_exception(_is_retryable),
         reraise=True,

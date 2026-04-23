@@ -10,7 +10,7 @@ from ..http import request_with_retry
 from ..logging import get_logger
 from .errors import BadRequestError, CamundaError, ConflictError, NotFoundError
 from .models import ActivityInstance, Incident, ProcessInstance, ProcessStatus
-from .variables import from_camunda_vars, to_camunda_vars
+from .variables import from_camunda_var, from_camunda_vars, to_camunda_vars
 
 log = get_logger(__name__)
 
@@ -113,7 +113,15 @@ class CamundaClient:
         return from_camunda_vars(resp.json())
 
     async def get_process_status(self, process_instance_id: str) -> ProcessStatus:
-        instance = await self.get_process_instance(process_instance_id)
+        """Return full-lifecycle status: runtime view while active, history view after completion.
+
+        Camunda's runtime endpoints 404 as soon as an instance finishes, so we fall back to
+        /history/* to keep this tool useful for post-mortems.
+        """
+        try:
+            instance = await self.get_process_instance(process_instance_id)
+        except NotFoundError:
+            return await self._get_historic_status(process_instance_id)
         activities = await self.get_activity_instances(process_instance_id)
         incidents = await self.list_incidents(process_instance_id=process_instance_id)
         variables = await self.get_variables(process_instance_id)
@@ -123,6 +131,50 @@ class CamundaClient:
             incidents=incidents,
             variables=variables,
         )
+
+    async def _get_historic_status(self, process_instance_id: str) -> ProcessStatus:
+        instance = await self._get_historic_instance(process_instance_id)
+        activities = await self._get_historic_activities(process_instance_id)
+        variables = await self._get_historic_variables(process_instance_id)
+        # Incidents on a finished instance can still be queried historically, but for the
+        # status tool we care about actionable (open) ones; none exist post-completion.
+        return ProcessStatus(instance=instance, activities=activities, incidents=[], variables=variables)
+
+    async def _get_historic_instance(self, process_instance_id: str) -> ProcessInstance:
+        resp = await self._request("GET", f"/history/process-instance/{process_instance_id}")
+        payload = resp.json()
+        state = payload.get("state")
+        ended = payload.get("endTime") is not None or state in {
+            "COMPLETED",
+            "EXTERNALLY_TERMINATED",
+            "INTERNALLY_TERMINATED",
+        }
+        suspended = state == "SUSPENDED"
+        return ProcessInstance.model_validate({
+            "id": payload["id"],
+            "definitionId": payload.get("processDefinitionId"),
+            "businessKey": payload.get("businessKey"),
+            "tenantId": payload.get("tenantId"),
+            "ended": ended,
+            "suspended": suspended,
+        })
+
+    async def _get_historic_activities(self, process_instance_id: str) -> list[ActivityInstance]:
+        resp = await self._request(
+            "GET",
+            "/history/activity-instance",
+            params={"processInstanceId": process_instance_id},
+        )
+        return [ActivityInstance.model_validate(it) for it in resp.json()]
+
+    async def _get_historic_variables(self, process_instance_id: str) -> dict[str, Any]:
+        resp = await self._request(
+            "GET",
+            "/history/variable-instance",
+            params={"processInstanceId": process_instance_id, "deserializeValues": "false"},
+        )
+        items = resp.json()
+        return {item["name"]: from_camunda_var(item) for item in items}
 
     async def list_incidents(
         self,

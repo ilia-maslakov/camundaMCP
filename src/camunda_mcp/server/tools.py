@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 from datetime import datetime
+from http import HTTPStatus
 from typing import Any
 
+import httpx
 from fastmcp import FastMCP
 
 from ..authz import check_allowed
 from ..camunda.client import CamundaClient
+from ..camunda.errors import CamundaError
 from ..camunda.models import Incident, ProcessInstance, ProcessStatus
 from ..config import Role
+from ..logging import get_logger
+
+log = get_logger(__name__)
 
 
 async def start_process_impl(
@@ -19,13 +25,38 @@ async def start_process_impl(
     variables: dict[str, Any] | None = None,
     allow_duplicate: bool = False,
 ) -> ProcessInstance:
-    """Start (or reuse) a process instance by (definition_key, business_key)."""
+    """Start (or reuse) a process instance by (definition_key, business_key).
+
+    Idempotency guarantees:
+      - Repeat invocations: the pre-check by (key, businessKey) returns the existing active
+        instance with `reused=True` unless `allow_duplicate=True`.
+      - In-flight network failure: if the engine accepts the create but the response is lost
+        (TransportError or 5xx), we re-query by businessKey and treat a found instance as the
+        recovered result. POST is never auto-retried by the HTTP layer (see http.py).
+    """
     check_allowed(role, "start_process")
     if not allow_duplicate:
         existing = await client.find_active_instance(process_definition_key, business_key)
         if existing is not None:
             return existing.model_copy(update={"reused": True})
-    return await client.start_process(process_definition_key, business_key, variables)
+    try:
+        return await client.start_process(process_definition_key, business_key, variables)
+    except (httpx.TransportError, CamundaError) as exc:
+        if allow_duplicate:
+            raise
+        # 4xx is a definitive engine rejection, not an ambiguous failure — don't recover.
+        if isinstance(exc, CamundaError) and exc.status_code < HTTPStatus.INTERNAL_SERVER_ERROR:
+            raise
+        log.warning(
+            "start_process ambiguous failure, probing for created instance",
+            process_definition_key=process_definition_key,
+            business_key=business_key,
+            error=str(exc),
+        )
+        recovered = await client.find_active_instance(process_definition_key, business_key)
+        if recovered is None:
+            raise
+        return recovered.model_copy(update={"reused": True})
 
 
 async def get_process_status_impl(
